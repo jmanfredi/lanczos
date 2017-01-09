@@ -1,0 +1,17 @@
+#!/bin/bash
+# Simple example to get started running a cuda program
+#
+# Load cuda command
+module load CUDA 
+
+# Compile the example
+nvcc lanczosGPUCSR.cu -I/mnt/home/manfred4/MatrixMarket -o lanczosGPUCSR_cuda
+#nvcc /mnt/home/manfred4/MatrixMarket/mmio.c -I/mnt/home/manfred4/MatrixMarket -c
+
+#nvcc mmio.o lanczosGPUCSR.cu -I/mnt/home/manfred4/MatrixMarket -o lanczosGPUCSR_cuda
+
+# Run the example on the command line
+./lanczosGPUCSR_cuda
+
+# Submit a cuda job to the queue
+#qsub simple_cuda.qsub
