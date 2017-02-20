@@ -1,3 +1,5 @@
+#include "lanczosGPUCSR.h"
+/*
 #include "cuda.h"
 #include <iostream>
 #include <ctime>
@@ -14,7 +16,7 @@ float vectorNorm(float* vec, long dim);
 void matrixProductSmart(float *mat1,long xDim1,long yDim1,float *mat2,long xDim2,long yDim2,float *matResult,long xResult,long yResult);
 void matrixVectorProduct(float *A,float* vec, float* result, long dim);
 void CSRmatrixVectorProduct(long* rows, long* cols, float* vals,float* vec, float* result, long dim);
-
+*/
 
 __global__ void sparseMVKernel(long* rows, long* cols, float* vals,float* vj,float* result,long dim,long nnz){
   //Matrix-vector multiplication kernel for sparse matrices (CSR format)
@@ -52,7 +54,7 @@ __global__ void sparseMVKernel(long* rows, long* cols, float* vals,float* vj,flo
 
 /*
 void allocateAndTransferMemory(long* rows, long* cols, float* vals, float* v, float* result, int dim, int nnz){
-  //Allocate sufficient memory on the GPU and transfer the matrix
+  //Allocate sufficient memory on the GPU and transfer from host to device
 
   long * rows_device;
   long * cols_device;
@@ -79,6 +81,48 @@ void allocateAndTransferMemory(long* rows, long* cols, float* vals, float* v, fl
   cudaMemcpy(v_device, v, sizeVector, cudaMemcpyHostToDevice);
 
 
+}
+*/
+/*
+long* allocateAndTransferMemory(long* dataHost, int size){
+  //Function that takes as input two pointers (one to an array of data on the host CPU
+  //and another to an array of data on the device) and one integer that should be the 
+  //size of both arrays. The function allocates memory on the GPU and then transfers
+  //dataHost to dataDevice. Ultimately, the function returns the pointer dataDevice.
+
+  long* dataDevice;
+
+  //Allocate on GPU
+  cudaMalloc((void **) &dataDevice, sizeof(long)*size);
+  
+  //Transfer to from host to GPU/device
+  cudaMemcpy(dataDevice, dataHost, sizeof(long)*size, cudaMemcpyHostToDevice);
+
+  return dataDevice;
+
+}
+
+long* transferAndFreeMemory(long *dataDevice, int size){
+  //Function that takes as input a pointer to an array on the device, and returns
+  //a pointer to the transferred result on the host. The function also frees
+  //the GPU memory.
+
+  long dataHost[size];
+
+  //Transfer from GPU/device to host
+  cudaMemcpy(dataHost, dataDevice, size, cudaMemcpyDeviceToHost);
+
+  //Free memory from device
+  cudaFree(dataDevice);
+
+  return dataHost;
+}
+*/
+/*
+void matrixMemSetup(long* rows, long* cols, float* vals, int dim, int nnz){
+  //This function allocates and transfers the memory related to the sparse matrix. This
+  //matrix is invariant throughout the entire calculation, so this function needs only
+  //to be run once at the start of the calculation.
 }
 */
 
@@ -136,7 +180,7 @@ void sparseMV(long* rows, long*cols, float* vals, float* v, float* result, int d
 }
 
 
-
+/*
 
 void printGridSmart(float *array, long xDim, long yDim){
 
@@ -206,8 +250,8 @@ void readMatrixFromFile(long* rows, long* cols, float* vals, char* filename){
       exit(1);
     }
 
-  /*  This is how one can screen matrix types if their application */
-  /*  only supports a subset of the Matrix Market data types.      */
+    //  This is how one can screen matrix types if their application 
+    //only supports a subset of the Matrix Market data types.      
 
   if (mm_is_complex(matcode) && mm_is_matrix(matcode) &&
       mm_is_sparse(matcode) )
@@ -217,7 +261,7 @@ void readMatrixFromFile(long* rows, long* cols, float* vals, char* filename){
       exit(1);
     }
 
-  /* find out size of sparse matrix .... */
+  // find out size of sparse matrix .... 
 
   if ((ret_code = mm_read_mtx_crd_size(f, &M, &N, &nz)) !=0)
     exit(1);
@@ -227,29 +271,29 @@ void readMatrixFromFile(long* rows, long* cols, float* vals, char* filename){
     cout << "WARNING! Matrix is not square: " << M << " by " << N<< endl;
   }
 
-  /* NOTE: when reading in doubles, ANSI C requires the use of the "l"  */
-  /*   specifier as in "%lg", "%lf", "%le", otherwise errors will occur */
-  /*  (ANSI C X3.159-1989, Sec. 4.9.6.2, p. 136 lines 13-15)            */
+  // NOTE: when reading in doubles, ANSI C requires the use of the "l"  
+  //   specifier as in "%lg", "%lf", "%le", otherwise errors will occur 
+  //  (ANSI C X3.159-1989, Sec. 4.9.6.2, p. 136 lines 13-15)            
 
   for (long i=0; i<nz; i++)
     {
       //      fscanf(f, "%d %d %lg\n", &I[i], &J[i], &val[i]);      
       fscanf(f, "%li %li %f\n", &rows[i], &cols[i], &vals[i]);
-      /*
-      if (i%1000 == 0){
-	cout << "READING " << rows[i] << " " << cols[i] << " "<<vals[i] << endl;
-      }
-      */
+      
+      //if (i%1000 == 0){
+	//cout << "READING " << rows[i] << " " << cols[i] << " "<<vals[i] << endl;
+      //}
+      
       //Below not fully tested...just stick with simple case for now
       //If the file only has two values (the row and column) then assume
       //that the value is 1.
-      /*
-      if (fscanf(f, "%d %d %g\n", &rows[i], &cols[i], &vals[i]) != 3){
-	vals[i] = 1;
-      }
-      */
-	//      I[i]--;  /* adjust from 1-based to 0-based */
-      rows[i]--;  /* adjust from 1-based to 0-based */
+      
+      //if (fscanf(f, "%d %d %g\n", &rows[i], &cols[i], &vals[i]) != 3){
+	//vals[i] = 1;
+      //}
+      
+	//      I[i]--;  // adjust from 1-based to 0-based 
+      rows[i]--;  // adjust from 1-based to 0-based 
       //      J[i]--;
       cols[i]--;
     }
@@ -283,8 +327,8 @@ void readMatrixInfo(char* filename, long* dim, long* nnz){
       exit(1);
     }
 
-  /*  This is how one can screen matrix types if their application */
-  /*  only supports a subset of the Matrix Market data types.      */
+  //  This is how one can screen matrix types if their application 
+  //  only supports a subset of the Matrix Market data types.      
 
   if (mm_is_complex(matcode) && mm_is_matrix(matcode) &&
       mm_is_sparse(matcode) )
@@ -294,7 +338,7 @@ void readMatrixInfo(char* filename, long* dim, long* nnz){
       exit(1);
     }
 
-  /* find out size of sparse matrix .... */
+  // find out size of sparse matrix .... 
 
   if ((ret_code = mm_read_mtx_crd_size(f, &M, &N, &nz)) !=0)
     exit(1);
@@ -349,7 +393,7 @@ void convertFromCOO_ToCSR(long* rowsCOO, long* colsCOO, float* valsCOO, long dim
 
     //Now I have the matrix in CSR format in rowsCSR, colsCSR, and valsCSR.
   }
-
+*/
 
 void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, long nnz,float precision,int eigenNum,int maxKrylov){
   //This is a simple implementation of tha LA using CSR sparse matrix vector multiplication. For details, see the Wikipedia
@@ -391,6 +435,23 @@ void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, lo
     vjPlus1[i]=0;
   }
 
+  //test FOR ALLOCATING MEMORY OF MATRIX
+  //  allocateAndTransferRows(rows,dim+1);//Rows
+  //  allocateAndTransferCols(cols,nnz);//Cols
+  //  allocateAndTransferVals(vals,nnz);//Vals
+
+  long* rowsDevice;
+  cudaMalloc((void **) &rowsDevice, sizeof(long)*(dim+1));
+  cudaMemcpy(rowsDevice, rows, sizeof(long)*(dim+1), cudaMemcpyHostToDevice);
+
+  long* colsDevice;
+  cudaMalloc((void **) &colsDevice, sizeof(long)*nnz);
+  cudaMemcpy(colsDevice, cols, sizeof(long)*nnz, cudaMemcpyHostToDevice);
+
+  float* valsDevice;
+  cudaMalloc((void **) &valsDevice, sizeof(float)*nnz);
+  cudaMemcpy(valsDevice, vals, sizeof(float)*nnz, cudaMemcpyHostToDevice);
+
   cout << "**Initializing Q matrix of size " << dim<< " by " << maxKrylov<< endl;
   float *Q;
   Q = (float *)malloc(sizeof(float)*dim*maxKrylov);
@@ -409,8 +470,31 @@ void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, lo
     //******************************************************
     //Do a matrix vector multiplication: A times vj equals wjPrime
     //CSRmatrixVectorProduct(rows,cols,vals,vj,wjPrime,dim);
-    sparseMV(rows,cols,vals,vj,wjPrime,dim,nnz);
-    //******************************************************
+    //sparseMV(rows,cols,vals,vj,wjPrime,dim,nnz);
+    
+    //Allocate memory for vector
+    //    vjDevice = allocateAndTransferVector();//Vector
+    //    wjPrimeDevice = allocateAndTransferResult();//Result
+    float* vjDevice;
+    cudaMalloc((void**) &vjDevice, sizeof(float)*dim);
+    cudaMemcpy(vjDevice, vj, sizeof(float)*dim, cudaMemcpyHostToDevice);
+
+    float* wjPrimeDevice;
+    cudaMalloc((void **) &wjPrimeDevice, sizeof(float)*dim);
+
+    //    sparseMVTest(rowsDevice,colsDevice,valsDevice,vjDevice,wjPrimeDevice,dim,nnz);
+
+    dim3 blockSize(dim,1,1);
+    dim3 gridSize(1,1,1);
+    sparseMVKernel<<<gridSize,blockSize>>>(rowsDevice,colsDevice,valsDevice,
+					   vjDevice,wjPrimeDevice,dim,nnz);
+
+    //Transfer result
+    cudaMemcpy(wjPrime,wjPrimeDevice, sizeof(float)*dim, cudaMemcpyDeviceToHost);
+
+    //Free memory
+    cudaFree(vjDevice);
+    cudaFree(wjPrimeDevice);
 
     //According to T&B, the following implementation of Lanczos has better stability properties
     //than the one above. All I do is subtract betaj*vjMinus1 from the result of the matrix-vector
@@ -516,6 +600,8 @@ void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, lo
 
 }
 
+
+/*
 float dotProduct(float* vec1, float* vec2, long dim){
   //Calculate dot product of two vectors
   //int dim1 = sizeof(vec1)/sizeof(vec1[0]);
@@ -539,7 +625,8 @@ float dotProduct(float* vec1, float* vec2, long dim){
   return product;
 
 }
-
+*/
+/*
 float vectorNorm(float* vec, long dim){
   //Calculate the norm of a vector
   //  int dim = sizeof(vec)/sizeof(vec[0]);
@@ -579,7 +666,8 @@ void matrixProductSmart(float* mat1, long xDim1, long yDim1, float* mat2, long x
   return;
 
 }
-
+*/
+/*
 void matrixVectorProduct(float* A, float* vec, float* result, long dim){
 
   for (long i=0; i<dim; i++){
@@ -616,7 +704,7 @@ void CSRmatrixVectorProduct(long* rows, long* cols, float* vals, float* vec, flo
   }
 
 } 
-
+*/
 
 int main()
 {
