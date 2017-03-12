@@ -5,7 +5,7 @@
 module load CUDA 
 
 # Compile the example
-nvcc lanczosGPUCSR.cu -I/mnt/home/manfred4/MatrixMarket -o lanczosGPUCSR_cuda
+nvcc lanczosGPUCSR.cu -arch=compute_30 -code=sm_30 -I/mnt/home/manfred4/MatrixMarket -o lanczosGPUCSR_cuda
 #nvcc /mnt/home/manfred4/MatrixMarket/mmio.c -I/mnt/home/manfred4/MatrixMarket -c
 
 #nvcc mmio.o lanczosGPUCSR.cu -I/mnt/home/manfred4/MatrixMarket -o lanczosGPUCSR_cuda
