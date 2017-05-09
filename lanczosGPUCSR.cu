@@ -31,7 +31,7 @@ __global__ void sparseMVKernel(long* rows, long* cols, float* vals,float* vj,flo
   if (i<dim){
     rowStart = rows[i];
     rowEnd = rows[i+1];
-    result[i]=0;
+    //result[i]=0;
     //Initialize inner product
     sum = 0;
 
@@ -44,64 +44,85 @@ __global__ void sparseMVKernel(long* rows, long* cols, float* vals,float* vj,flo
   }
 }
 
-void sparseMV(long* rows, long*cols, float* vals, float* v, float* result, int dim, int nnz){
-  //Wrapper function for calling sparseMVKernal
+__global__ void csrVectorKernel(long* Ap, long* Aj, float* Ax, float* x, float* y,long num_rows, long nnz){
+  //Matrix-vector multiplication kernel using CSR-vector
+  
+  const int BLOCK_SIZE = 256;
+  const int WARP_SIZE = 32;
+  const bool UseCache = false;//Texture memory does not make sense to use for Lanczos
 
-  //STEP 1: ALLOCATE
-  //Allocate rows,cols, and vals
-  long * rows_device;
-  long * cols_device;
-  float * vals_device;
-  int sizeMatrix = sizeof(float)*dim*dim;
-  cout << "**Allocating matrix with " << sizeMatrix << " elements**" << endl;
-  cudaMalloc((void **) &rows_device, sizeof(long)*(dim+1));
-  cudaMalloc((void **) &cols_device, sizeof(long)*nnz);
-  cudaMalloc((void **) &vals_device, sizeof(float)*nnz);
-  //Allocate input vector
-  float * v_device;
-  int sizeVector = sizeof(float)*dim;
-  cudaMalloc((void **) &v_device, sizeVector);
-  //Allocate result vector
-  float * result_device;
-  cudaMalloc((void **) &result_device, sizeVector);
+  //Set up shared memory for sums
+  __shared__ float sdata[BLOCK_SIZE];
+  __shared__ long ptrs[BLOCK_SIZE/WARP_SIZE][2];
 
-  //STEP 2: TRANSFER
-  //Transfer matrix
-  cudaMemcpy(rows_device, rows, sizeof(long)*(dim+1), cudaMemcpyHostToDevice);
-  cudaMemcpy(cols_device, cols, sizeof(long)*nnz, cudaMemcpyHostToDevice);
-  cudaMemcpy(vals_device, vals, sizeof(float)*nnz, cudaMemcpyHostToDevice);
-  //Transfer vector
-  cudaMemcpy(v_device, v, sizeVector, cudaMemcpyHostToDevice);
+  long thread_id = BLOCK_SIZE * blockIdx.x + threadIdx.x; //global thread index
+  long thread_lane = thread_id & (WARP_SIZE - 1);  //Lane corresponds to Warp local thread ID (that is, which coalesced memory bunch)
+  long warp_id = thread_id / WARP_SIZE;  //Warp ID corresponds to one row
+  long warp_lane = threadIdx.x / WARP_SIZE;
+  long num_warps = (BLOCK_SIZE / WARP_SIZE) * gridDim.x;
 
-  //STEP 3: SET UP
-  //  dim3 blockSize(ceil(MATRIXDIM/TILEWIDTH)+1,1,1);
-  dim3 blockSize(dim,1,1);
-  dim3 gridSize(1,1,1);
+  for (long row = warp_id; row < num_rows; row+=num_warps){
+    //use two threads to get Ap[row] and Ap[row+1] for memory considerations
+    if (thread_lane<2)
+      ptrs[warp_lane][thread_lane] = Ap[row+thread_lane];
+    long row_start = ptrs[warp_lane][0];
+    long row_end = ptrs[warp_lane][1];
 
-  //STEP 4: RUN KERNEL
-  sparseMVKernel<<<gridSize, blockSize>>>(rows_device,cols_device,vals_device,
-					  v_device,result_device,dim,nnz);
+    //compute local sum
+    sdata[threadIdx.x] = 0;
+    for (long jj = row_start + thread_lane; jj < row_end; jj+= WARP_SIZE)
+      sdata[threadIdx.x] += Ax[jj] * fetch_x<UseCache>(Aj[jj],x);
 
-  //STEP 5: TRANSFER
-  //Transfer result vector
-  cudaMemcpy(result, result_device, sizeVector, cudaMemcpyDeviceToHost);
-  //  cout << "--------------------" << endl;
+    //Assume warp size 32, reduce local sums to row sums
+    if (thread_lane < 16) { sdata[threadIdx.x] += sdata[threadIdx.x + 16]; __syncthreads(); }
+    if (thread_lane < 8) { sdata[threadIdx.x] += sdata[threadIdx.x + 8]; __syncthreads(); }
+    if (thread_lane < 4) { sdata[threadIdx.x] += sdata[threadIdx.x + 4]; __syncthreads(); }
+    if (thread_lane < 2) { sdata[threadIdx.x] += sdata[threadIdx.x + 2]; __syncthreads(); }
+    if (thread_lane < 1) { sdata[threadIdx.x] += sdata[threadIdx.x + 1]; __syncthreads(); }
 
-  //Step 6: Free memory on device
-  cudaFree(rows_device);
-  cudaFree(cols_device);
-  cudaFree(vals_device);
-  cudaFree(v_device);
-  cudaFree(result_device);
+    //first thread writes warp result
+    if (thread_lane == 0)
+      y[row] += sdata[threadIdx.x];
+  }
 
-  return;
 }
 
+  /*
+  //Check if row number is good
+  if (row < dim){
+    int row_start = rows[row];
+    int row_end = rows[row+1];
+
+    //Compute running sum
+    sums[threadIdx.x] = 0;
+    __syncthreads();
+
+    //Run the loop
+    for (int jj = row_start + lane; jj < row_end; jj += WARP_SIZE){
+      sums[threadIdx.x] += vals[jj] * vj[cols[jj]];
+      __syncthreads();
+    }
+
+    //Parallel reduction in shared memory to combine into one sum
+    for (int d = WARP_SIZE >> 1; d >= 1; d>>=1){
+      if (lane < d) sums[threadIdx.x] += sums[threadIdx.x + d];
+      __syncthreads();
+    }
+
+    //First thread in the warp writes the result
+    if (lane = 0){
+      result[row] += sums[threadIdx.x];
+    }
+
+  }
+
+}
+  */
 
 void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, long nnz,float precision,int eigenNum,int maxKrylov){
-  //This is a simple implementation of tha LA using CSR sparse matrix vector multiplication. For details, see the Wikipedia
-  //article about the Lanczos Algorithm
-
+  //This is a simple implementation of tha LA using CSR sparse matrix vector multiplication. For details
+  //on the algorithm itself, see the Wikipedia article about the Lanczos Algorithm
+  //Also, I implement a simple reorthogonalization using Gram Schmidt.
 
   /*
   for (int k=0;k<dim+1;k++){
@@ -171,7 +192,7 @@ void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, lo
   for (int j=0; j<maxKrylov; j++){
     //Start Krylov loop
 
-    //    cout << "Iteration number " << j << endl;
+    if (j%10==0) cout << "Iteration number " << j << endl;
 
     //******************************************************
     //Do a matrix vector multiplication: A times vj equals wjPrime
@@ -192,8 +213,17 @@ void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, lo
 
     dim3 blockSize(1024,1,1);
     dim3 gridSize(1,1,1);
-    sparseMVKernel<<<ceil(dim/256),256>>>(rowsDevice,colsDevice,valsDevice,
-					   vjDevice,wjPrimeDevice,dim,nnz);
+    int BLOCK_SIZE = 256;
+    int NUM_BLOCKS = 120;
+    //    int NUM_BLOCKS = ceil(dim/256);
+    
+    //CSR SCALER KERNEL
+    //    sparseMVKernel<<<NUM_BLOCKS,BLOCK_SIZE>>>(rowsDevice,colsDevice,valsDevice,
+    //					      vjDevice,wjPrimeDevice,dim,nnz);
+
+    //CSR VECTOR KERNEL
+    csrVectorKernel<<<NUM_BLOCKS,BLOCK_SIZE>>>(rowsDevice,colsDevice,valsDevice,
+        				       vjDevice,wjPrimeDevice,dim,nnz);
 
     gpuErrCheck( cudaPeekAtLastError() );
     gpuErrCheck( cudaDeviceSynchronize() );
@@ -224,6 +254,32 @@ void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, lo
       wj[i] = wjPrime[i] - alphaj*vj[i] - betaj*vjMinus1[i];
     }
 
+    //Reorthogonalization
+    
+    for (int i = 0; i < j; i++)
+      {
+	//Get Krylov vector
+	//	viennacl::vector_base<NumericT> q_j(Q.handle(), Q.size1(), j * Q.internal_size1(), 1);
+	float qi[dim];
+	for (int k=0; k<dim ; k++){
+	  //Get ith vector from Q
+	  qi[k] = Q[k*maxKrylov + i];
+	}
+
+	//Inner product of wj and Krylov vector
+	//	NumericT inner_rq = viennacl::linalg::inner_prod(Aq, q_j);
+	float orthoCorr = dotProduct(wj,qi,dim);
+
+	//Subtract from wj
+	//Aq -= inner_rq * q_j;
+
+	for (int z=0; z<dim; z++){
+	  wj[z] = wj[z] - orthoCorr*qi[z];
+	}
+
+      }//end reortho
+    
+
     //Calculate betajPlus1 = norm(wj)
     float normWjSquared=0;
     for (long i=0; i<dim; i++){
@@ -240,14 +296,14 @@ void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, lo
     //Orthogonality check
     //    cout << "Check orthogonality between vj and vjPlus1: "<<dotProduct(vj,vjPlus1,dim) << endl;
 
-
+    /*
     //Write the vj's to a matrix (use to test tridiagonality)
     for (long i=0; i<dim; i++){
       //Write elements of vj to a column of Q (fixed j, vary i)
       //Q[i][j] = vj[i];
       Q[i*maxKrylov + j] = vj[i];
     }
-    
+    */
 
     //Assign vectors for the next iteration
     for (long i=0; i<dim; i++){
@@ -272,35 +328,35 @@ void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, lo
     }
   }
   
+  /*  
+  cout << "This is Q: " << endl;
+  printGridSmart(Q,dim,maxKrylov);
+  cout << " ***********************" << endl;
+  cout << "This is Q*" << endl;
+  printGridSmart(Qstar,maxKrylov,dim);
+
+  cout << " ***********************" << endl;
+  float* identityCheck;
+  identityCheck = (float *)malloc(sizeof(float)*maxKrylov*maxKrylov);
+
+  matrixProductSmart(Qstar,maxKrylov,dim,Q,dim,maxKrylov,
+  		     identityCheck,maxKrylov,maxKrylov);
+
+  cout << "This is identity check" << endl;
+  printGridSmart(identityCheck,ITERATION,ITERATION);
+  cout << " ***********************" << endl;
+  float* QstarA;
+  QstarA = (float *)malloc(sizeof(float)*maxKrylov*dim);
+
+  matrixProductSmart(Qstar,maxKrylov,dim,A,dim,dim,QstarA,maxKrylov,dim);
   
-  //cout << "This is Q: " << endl;
-  //printGridSmart(Q,dim,maxKrylov);
-  //cout << " ***********************" << endl;
-  //cout << "This is Q*" << endl;
-  //printGridSmart(Qstar,maxKrylov,dim);
+  float* QstarAQ;
+  QstarAQ = (float *)malloc(sizeof(float)*maxKrylov*maxKrylov);
 
-  //cout << " ***********************" << endl;
-  //float* identityCheck;
-  //identityCheck = (float *)malloc(sizeof(float)*ITERATION*ITERATION);
-
-  //matrixProductSmart(Qstar,maxKrylov,dim,Q,dim,maxKrylov,
-  //		     identityCheck,maxKrylov,maxKrylov);
-
-  //cout << "This is identity check" << endl;
-  //printGridSmart(identityCheck,ITERATION,ITERATION);
-  //cout << " ***********************" << endl;
-  //float* QstarA;
-  //QstarA = (float *)malloc(sizeof(float)*maxKrylov*dim);
-
-  //matrixProductSmart(Qstar,maxKrylov,dim,A,dim,dim,QstarA,maxKrylov,dim);
-  
-  //float* QstarAQ;
-  //QstarAQ = (float *)malloc(sizeof(float)*maxKrylov*maxKrylov);
-
-  //matrixProductSmart(QstarA,maxKrylov,dim,Q,dim,maxKrylov,QstarAQ,maxKrylov,maxKrylov);
-  //cout << "This is QstarAQ" << endl;
-  //printGridSmart(QstarAQ,maxKrylov,maxKrylov);
-  
+  matrixProductSmart(QstarA,maxKrylov,dim,Q,dim,maxKrylov,QstarAQ,maxKrylov,maxKrylov);
+  cout << "This is QstarAQ" << endl;
+  printGridSmart(QstarAQ,maxKrylov,maxKrylov);
+  */
   
   cout << "Duration of Krylov loop: " << duration << endl;
 
@@ -313,14 +369,29 @@ void lanczosCSR(long* rows,long* cols, float* vals,float* randomVec,long dim, lo
 int main()
 {
   //Initialize filename
-  //  char filename[100] = "../matrices/b1_ss/b1_ss.mtx";
+  //char filename[100] = "../matrices/b1_ss/b1_ss.mtx";
   //  char filename[100] = "../matrices/SmallW/SmallW.mtx";
   //char filename[100] = "../matrices/M80PI_n1/M80PI_n1.mtx";
-  //char filename[100] = "../matrices/bips07_2476/bips07_2476.mtx";
+  //  char filename[100] = "../matrices/bips07_2476/bips07_2476.mtx";
   //char filename[100] = "../matrices/copter2/copter2.mtx";
-  //  char filename[100] = "../matrices/atmosmodd/atmosmodd.mtx";
+  //char filename[100] = "../matrices/atmosmodd/atmosmodd.mtx";
   //char filename[100] = "../matrices/circuit5M/circuit5M.mtx";
-  char filename[100] = "../matrices/nlpkkt240/nlpkkt240.mtx";  
+  //char filename[100] = "../matrices/nlpkkt240/nlpkkt240.mtx";  
+
+  //BellGarland
+  //  char filename[100] = "../matrices/bellGarland/dense2.mtx";
+  char filename[100] = "../matrices/bellGarland/webbase-1M.mtx";
+  //char filename[100] = "../matrices/bellGarland/cop20k_A.mtx";
+  //char filename[100] = "../matrices/bellGarland/mac_econ_fwd500.mtx";
+  //char filename[100] = "../matrices/bellGarland/mc2depi.mtx";
+  //char filename[100] = "../matrices/bellGarland/pdb1HYS.mtx";
+  //char filename[100] = "../matrices/bellGarland/pwtk.mtx";
+  //char filename[100] = "../matrices/bellGarland/qcd5_4.mtx";
+  //char filename[100] = "../matrices/bellGarland/rma10.mtx";
+  //char filename[100] = "../matrices/bellGarland/scircuit.mtx";
+  //char filename[100] = "../matrices/bellGarland/shipsec1.mtx";
+  //char filename[100] = "../matrices/bellGarland/cant.mtx";
+  //char filename[100] = "../matrices/bellGarland/consph.mtx";
 
   long nnz=0;
   long dim=0;
@@ -329,6 +400,7 @@ int main()
   cout <<"**Reading matrix info**"<<endl;
   readMatrixInfo(filename,&dim,&nnz);
   cout << "nnz " << nnz << " and dim " << dim << endl;
+  cout << "Average nnz/row: " << nnz/dim << endl;
 
   //Initialize sparse matrix vectors
   //COO
@@ -399,6 +471,7 @@ int main()
   int iterationNum = min(max(10,(int)ceil(dim*0.1)),100);
   //  int iterationNum = 5;
   cout << "**Iteration Number: " <<iterationNum<<"**"<<endl;
+
   //Lanczos CSR method for CPU
   lanczosCSR(rowsCSR,colsCSR,valsCSR,randomVec,dim,nnz,0.75,10,iterationNum);
   

@@ -3,6 +3,8 @@
 #include <ctime>
 #include <stdio.h>
 #include <stdlib.h>
+#include </mnt/home/manfred4/spmv/mem.h>
+#include </mnt/home/manfred4/spmv/texture.h>
 //INFINITE SHAME on me for using the line below...but I was getting undefined reference errors using "#include mmio.h"
 //and trying to compile mmio separately and link to this. And I am working with a limited time frame.
 #include "mmio.c"
